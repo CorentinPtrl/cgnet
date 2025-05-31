@@ -9,6 +9,7 @@ import (
 	"net"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -27,6 +28,7 @@ type Device struct {
 	stdout       io.Reader
 	readChan     chan *string
 	prompt       string
+	lock         *sync.Mutex
 }
 
 var (
@@ -47,6 +49,7 @@ var (
 
 // Open the connection to the device
 func (d *Device) Open() error {
+	d.lock = &sync.Mutex{}
 	switch d.ConnType {
 	case Telnet:
 		err := d.connectTelnet()
@@ -72,15 +75,6 @@ func (d *Device) getPrompt() *regexp.Regexp {
 		d.prompt = d.prompt[:10]
 	}
 	return regexp.MustCompile(d.prompt + "[[:alnum:]\\(\\)-_]*[\\#>]")
-}
-
-// Exec2 executes a command on the device and without returning the output
-func (d *Device) Exec2(cmd ...string) error {
-	_, err := d.Exec(cmd...)
-	if err != nil {
-		return err
-	}
-	return nil
 }
 
 func (d *Device) login() error {
@@ -124,7 +118,6 @@ func (d *Device) login() error {
 	if d.Enable == "" {
 		enabled = true
 	}
-
 	if !enabled {
 		_, err := io.WriteString(d.stdin, "enable\n")
 		if err != nil {
@@ -156,8 +149,7 @@ func (d *Device) login() error {
 	return nil
 }
 
-// Exec executes a command on the device and returns the output
-func (d *Device) Exec(cmd ...string) (string, error) {
+func (d *Device) exec(cmd ...string) (string, error) {
 	go d.reader(cmd...)
 	_, err := io.WriteString(d.stdin, fmt.Sprint(strings.Join(cmd, ""), "\n"))
 	if err != nil {
@@ -178,6 +170,10 @@ func (d *Device) Exec(cmd ...string) (string, error) {
 			outputFormat = d.getPrompt().ReplaceAllString(outputFormat, "")
 			outputFormat = NLEnd.ReplaceAllString(outputFormat, "")
 
+			if strings.HasPrefix(outputFormat, "%") {
+				return "", errors.New(outputFormat)
+			}
+
 			if strings.Contains(outputFormat, "Unknown command") || strings.Contains(outputFormat, "Invalid input") {
 				return "", ErrUnknownCommand
 			}
@@ -187,6 +183,13 @@ func (d *Device) Exec(cmd ...string) (string, error) {
 			return "", ErrNoPrompt
 		}
 	}
+}
+
+// Exec executes a command on the device and returns the output
+func (d *Device) Exec(cmd ...string) (string, error) {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+	return d.exec(cmd...)
 }
 
 func (d *Device) reader(cmd ...string) {
