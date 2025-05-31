@@ -1,4 +1,4 @@
-module github.com/Letsu/cgnet
+module github.com/CorentinPtrl/cgnet
 
 go 1.18
 
